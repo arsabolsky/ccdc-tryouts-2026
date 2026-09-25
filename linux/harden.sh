@@ -17,7 +17,7 @@ MODE=${1:-audit}; shift || true
 YES=0; FIREWALL=0
 for a in "$@"; do case $a in --yes) YES=1;; --firewall) FIREWALL=1;; esac; done
 
-[ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
+[ "$EUID" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 STATE=/root/ccdc-backup
@@ -191,7 +191,7 @@ step_passwords() {
   done
   good "changed:$changed"
   if command -v doveconf >/dev/null 2>&1; then
-    doveconf -n 2>/dev/null | grep -A3 '^passdb' | grep -q 'passwd-file' \
+    doveconf -n 2>/dev/null | grep -A3 '^passdb' | grep 'passwd-file' >/dev/null \
       && flag "Dovecot uses a passwd-file, not system passwords. Update that file too or POP3 logins keep the old password."
   fi
   printf '\n  %sPCR for Quotient (box %s):%s\n' "$B" "$(hostname)" "$N"
@@ -348,10 +348,10 @@ step_verify() {
   if [ -n "${PW:-}" ] && command -v curl >/dev/null; then
     local who; who=$(for u in $USERS; do grep -q "^$u:" /etc/passwd && { echo "$u"; break; }; done)
     if [ -n "$who" ]; then
-      listeners | grep -q ':21 ' && { curl -s -m 5 --list-only ftp://127.0.0.1/ --user "$who:$PW" >/dev/null \
+      listeners | grep ':21 ' >/dev/null && { curl -s -m 5 --list-only ftp://127.0.0.1/ --user "$who:$PW" >/dev/null \
         && good "FTP login works as $who (local test)" || flag "FTP login as $who FAILED"; }
-      listeners | grep -q ':110 ' && ! curl -V | grep -qi pop3 && note "POP3 local test skipped (this curl has no POP3); use scorecheck.sh"
-      listeners | grep -q ':110 ' && curl -V | grep -qi pop3 && { curl -s -m 5 pop3://127.0.0.1/ --user "$who:$PW" >/dev/null \
+      listeners | grep ':110 ' >/dev/null && ! curl -V | grep -i pop3 >/dev/null && note "POP3 local test skipped (this curl has no POP3); use scorecheck.sh"
+      listeners | grep ':110 ' >/dev/null && curl -V | grep -i pop3 >/dev/null && { curl -s -m 5 pop3://127.0.0.1/ --user "$who:$PW" >/dev/null \
         && good "POP3 login works as $who (local test; dovecot trusts localhost, confirm with scorecheck.sh)" || flag "POP3 login as $who FAILED"; }
     fi
   fi

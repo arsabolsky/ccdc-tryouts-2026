@@ -4,6 +4,8 @@ ccdc.ps1 - audit and harden Windows Server 2016 (domain controller or member).
   .\ccdc.ps1                      read-only audit (default)
   .\ccdc.ps1 -Mode Harden         asks before every step
   .\ccdc.ps1 -Mode Harden -Yes    runs the safe steps without asking
+  .\ccdc.ps1 -Mode Hunt           read-only hunt: signatures, PowerShell history, event logs
+  .\ccdc.ps1 -Mode Hunt -Hours 3  ...only look at the last 3 hours of events
   .\ccdc.ps1 -Mode Watch          one watchdog pass (the installed task runs this)
   .\ccdc.ps1 -Mode RestoreFirewall
 
@@ -16,8 +18,9 @@ Rules this script follows (from the team packet):
   - never removes default AD group nesting or built-in accounts
 #>
 param(
-  [ValidateSet('Audit','Harden','Watch','RestoreFirewall')][string]$Mode = 'Audit',
-  [switch]$Yes
+  [ValidateSet('Audit','Harden','Hunt','Watch','RestoreFirewall')][string]$Mode = 'Audit',
+  [switch]$Yes,
+  [int]$Hours = 24
 )
 $ErrorActionPreference = 'Continue'
 
@@ -358,6 +361,134 @@ function Invoke-Watch {
   }
 }
 
+# ------------------------------------------------------------------- Hunt --
+function Test-MsSigned($path) {
+  # true if the file has a valid signature from Microsoft (embedded or catalog)
+  $sig = Get-AuthenticodeSignature -FilePath $path -ErrorAction SilentlyContinue
+  return ($sig -and $sig.Status -eq 'Valid' -and $sig.SignerCertificate.Subject -match 'O=Microsoft Corporation')
+}
+function Get-ExePath($cmdline) {
+  # "C:\x\y.exe" -k foo  /  C:\x\y.exe -k foo  ->  C:\x\y.exe
+  if (-not $cmdline) { return $null }
+  $c = [Environment]::ExpandEnvironmentVariables($cmdline.Trim())
+  $c = $c -replace '^\\\?\?\\', '' -replace '^\\SystemRoot\\', "$env:windir\" -replace '^System32\\', "$env:windir\System32\"
+  if ($c -match '^"([^"]+)"') { return $Matches[1] }
+  if ($c -match '^(.+?\.(exe|dll|sys))(\s|$)') { return $Matches[1] }
+  return ($c -split ' ')[0]
+}
+
+function Invoke-Hunt {
+  $since = (Get-Date).AddHours(-$Hours)
+
+  Hdr 'Critical system binaries (must be Microsoft-signed)'
+  $sys = "$env:windir\System32"
+  $crit = @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe','cmd.exe',
+            'WindowsPowerShell\v1.0\powershell.exe','lsass.exe','winlogon.exe','svchost.exe','services.exe',
+            'net.exe','net1.exe','sc.exe','schtasks.exe','taskmgr.exe','explorer.exe','userinit.exe','logonui.exe',
+            'whoami.exe','netstat.exe','tasklist.exe','wevtutil.exe','reg.exe')
+  foreach ($b in $crit) {
+    $f = if ($b -eq 'explorer.exe') { "$env:windir\explorer.exe" } else { Join-Path $sys $b }
+    if (-not (Test-Path $f)) { continue }
+    if (Test-MsSigned $f) { continue }
+    Flag "$f is NOT validly Microsoft-signed ($((Get-AuthenticodeSignature $f).Status))"
+  }
+  # Sticky-keys trick: an accessibility tool that is really a copy of cmd.exe or powershell.exe
+  $shells = @((Get-FileHash "$sys\cmd.exe").Hash, (Get-FileHash "$sys\WindowsPowerShell\v1.0\powershell.exe").Hash)
+  foreach ($b in @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe')) {
+    $f = Join-Path $sys $b
+    if ((Test-Path $f) -and ($shells -contains (Get-FileHash $f).Hash)) { Flag "$b is a copy of cmd/powershell (sticky-keys backdoor). Fix: sfc /scanfile=$f" }
+  }
+  Good "checked $($crit.Count) binaries (lines above are problems)"
+
+  Hdr 'Service binaries not signed by Microsoft (review each)'
+  Get-CimInstance Win32_Service | ForEach-Object {
+    $exe = Get-ExePath $_.PathName
+    if (-not $exe -or -not (Test-Path $exe)) { if ($_.PathName) { Flag "$($_.Name): binary missing or unparsable: $($_.PathName)" }; return }
+    $sig = Get-AuthenticodeSignature $exe -ErrorAction SilentlyContinue
+    if ($sig.Status -ne 'Valid') { Flag "$($_.Name) [$($_.State)] unsigned/invalid: $exe" }
+    elseif ($sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { Note "$($_.Name): signed by $(($sig.SignerCertificate.Subject -split ',')[0]) -> $exe" }
+  }
+
+  Hdr 'LSA packages and Winlogon (credential-theft and logon hooks)'
+  $lsa = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+  foreach ($k in @('Authentication Packages','Notification Packages','Security Packages')) {
+    foreach ($pkg in @($lsa.$k)) {
+      if (-not $pkg -or $pkg -eq '""') { continue }
+      $f = Join-Path $sys "$pkg.dll"
+      if (-not (Test-Path $f)) { Flag "$k '$pkg': $f not found" }
+      elseif (-not (Test-MsSigned $f)) { Flag "$k '$pkg' is not Microsoft-signed: $f" }
+    }
+  }
+  $wl = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+  if ($wl.Userinit -notmatch '^C:\\Windows\\system32\\userinit\.exe,?$') { Flag "Winlogon Userinit = $($wl.Userinit)" } else { Good 'Winlogon Userinit default' }
+  if ($wl.Shell -ne 'explorer.exe') { Flag "Winlogon Shell = $($wl.Shell)" } else { Good 'Winlogon Shell default' }
+
+  Hdr 'PowerShell history (all users)'
+  $sus = 'Invoke-WebRequest|iwr |wget |curl |DownloadString|DownloadFile|IEX|Invoke-Expression|-enc|EncodedCommand|FromBase64String|net user .* /add|net localgroup administrators|Add-LocalGroupMember|New-LocalUser|New-ADUser|Add-ADGroupMember|Set-MpPreference|Add-MpPreference|DisableRealtimeMonitoring|netsh advfirewall|New-NetFirewallRule|Set-NetFirewallProfile|schtasks|Register-ScheduledTask|New-Service|sc\.exe (create|config)|reg add|wevtutil cl|Clear-EventLog|Remove-Item .*history|mimikatz|sekurlsa|procdump|ntdsutil|vssadmin|Stop-Service|Set-Service .*Disabled'
+  $any = $false
+  foreach ($h in (Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -ErrorAction SilentlyContinue)) {
+    $any = $true
+    $u = ($h.FullName -split '\\')[2]
+    $lines = Get-Content $h.FullName
+    Write-Host "  -- $u ($($lines.Count) lines, modified $($h.LastWriteTime))"
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $sus) { Flag "${u}:$($i+1): $($lines[$i])" } }
+  }
+  if (-not $any) { Note 'no PSReadLine history files found' }
+
+  Hdr "Event logs (last $Hours h)"
+  function Ev($ids, $log = 'Security') { Get-WinEvent -FilterHashtable @{LogName=$log; Id=$ids; StartTime=$since} -ErrorAction SilentlyContinue }
+  function Field($e, $name) { ([xml]$e.ToXml()).Event.EventData.Data | Where-Object { $_.Name -eq $name } | Select-Object -ExpandProperty '#text' }
+
+  $cleared = @(Ev @(1102)) + @(Ev @(104) 'System')
+  foreach ($e in $cleared) { Flag "$($e.TimeCreated) event log CLEARED (id $($e.Id))" }
+  $oldest = Get-WinEvent -LogName Security -MaxEvents 1 -Oldest -ErrorAction SilentlyContinue
+  if ($oldest) { Note "oldest Security event: $($oldest.TimeCreated) (very recent = log was wiped)" }
+
+  Write-Host '  -- failed logons by account and source (top 15)'
+  $fails = Ev @(4625)
+  $fails | ForEach-Object { '{0} from {1}' -f (Field $_ 'TargetUserName'), (Field $_ 'IpAddress') } |
+    Group-Object | Sort-Object Count -Descending | Select-Object -First 15 | ForEach-Object { '    {0,5}  {1}' -f $_.Count, $_.Name }
+
+  Write-Host '  -- network/RDP logons (type 3, 10), by account and source'
+  $ok = Ev @(4624) | Where-Object { @('3','10') -contains (Field $_ 'LogonType') }
+  $ok | Where-Object { (Field $_ 'TargetUserName') -notmatch '\$$|^ANONYMOUS' } |
+    ForEach-Object { '{0} from {1} (type {2})' -f (Field $_ 'TargetUserName'), (Field $_ 'IpAddress'), (Field $_ 'LogonType') } |
+    Group-Object | Sort-Object Count -Descending | Select-Object -First 15 | ForEach-Object { '    {0,5}  {1}' -f $_.Count, $_.Name }
+
+  # Brute force that worked: 5+ failures then a success from the same source
+  $bad = $fails | Group-Object { Field $_ 'IpAddress' } | Where-Object { $_.Count -ge 5 -and $_.Name -notin @('-','','127.0.0.1','::1') }
+  foreach ($g in $bad) {
+    $hit = $ok | Where-Object { (Field $_ 'IpAddress') -eq $g.Name } | Select-Object -First 1
+    if ($hit) { Flag "$($g.Name): $($g.Count) failed logons, then success as $(Field $hit 'TargetUserName') at $($hit.TimeCreated)" }
+  }
+
+  foreach ($e in (Ev @(4720))) { Flag "$($e.TimeCreated) account created: $(Field $e 'TargetUserName') by $(Field $e 'SubjectUserName')" }
+  foreach ($e in (Ev @(4728,4732,4756))) { Flag "$($e.TimeCreated) added to group $(Field $e 'TargetUserName'): $(Field $e 'MemberName') by $(Field $e 'SubjectUserName')" }
+  foreach ($e in (Ev @(4724))) { Note "$($e.TimeCreated) password reset: $(Field $e 'TargetUserName') by $(Field $e 'SubjectUserName')" }
+  foreach ($e in (Ev @(4698))) { Flag "$($e.TimeCreated) scheduled task created: $(Field $e 'TaskName') by $(Field $e 'SubjectUserName')" }
+  foreach ($e in (Ev @(7045) 'System')) { Flag "$($e.TimeCreated) service installed: $($e.Properties[0].Value) -> $($e.Properties[1].Value)" }
+  foreach ($e in (Ev @(4946,4947,4948) )) { Note "$($e.TimeCreated) firewall rule change (id $($e.Id)): $(Field $e 'RuleName')" }
+
+  Write-Host '  -- suspicious process command lines (needs 4688 with command line; the harden Logging step enables it)'
+  Ev @(4688) | ForEach-Object { Field $_ 'CommandLine' } | Where-Object { $_ -match $sus } | Select-Object -First 25 -Unique | ForEach-Object { Flag "cmdline: $_" }
+  Write-Host '  -- suspicious PowerShell script blocks (4104)'
+  Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104; StartTime=$since} -ErrorAction SilentlyContinue |
+    Where-Object { $_.Properties[2].Value -match $sus } | Select-Object -First 15 |
+    ForEach-Object { Flag "$($_.TimeCreated) scriptblock: $(($_.Properties[2].Value -replace '\s+',' ').Substring(0, [Math]::Min(160, ($_.Properties[2].Value -replace '\s+',' ').Length)))" }
+
+  Hdr 'Files changed recently in sensitive places'
+  foreach ($d in @("$env:windir\System32", "$env:windir\SysWOW64", 'C:\inetpub', 'C:\ProgramData', 'C:\Users\Public', "$env:windir\Temp", "$env:windir\System32\Tasks")) {
+    if (-not (Test-Path $d)) { continue }
+    $recurse = $d -notmatch 'System32$|SysWOW64$'
+    Get-ChildItem $d -File -Recurse:$recurse -Force -ErrorAction SilentlyContinue |
+      Where-Object { $_.LastWriteTime -gt $since -and $_.Extension -match '\.(exe|dll|ps1|bat|cmd|vbs|js|hta|aspx?|php|jsp|xml)$' } |
+      Select-Object -First 25 | ForEach-Object { Note "$($_.LastWriteTime)  $($_.FullName)" }
+  }
+
+  Hdr 'Summary'
+  Write-Host "  Screenshot the evidence before removing anything (for incident reports). Log: $Log"
+}
+
 # ------------------------------------------------------------------- Main --
 switch ($Mode) {
   'Audit'  { Invoke-Audit; Write-Host "`n  Audit only. Nothing was changed. Log: $Log" }
@@ -369,6 +500,7 @@ switch ($Mode) {
     Write-Host "  Log: $Log"
     Write-Host '  Next: run .\ccdc.ps1 (audit) and review every [!!] line. Submit the PCR list in Quotient.'
   }
+  'Hunt'   { Invoke-Hunt }
   'Watch'  { Invoke-Watch }
   'RestoreFirewall' {
     $f = Join-Path $State 'firewall-original.wfw'

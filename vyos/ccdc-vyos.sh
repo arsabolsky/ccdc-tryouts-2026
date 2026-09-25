@@ -47,15 +47,23 @@ audit() {
   who
 }
 
+ensure_reload_action() {
+  # commit-confirm reads the rollback action from the RUNNING config, and the
+  # default is "reboot". Commit "reload" on its own first so an unconfirmed
+  # change only reloads the previous config instead of rebooting the router.
+  if ! cfg | grep -q "commit-confirm action 'reload'"; then
+    set system config-management commit-confirm action reload
+    commit && echo "  rollback action set to reload"
+  fi
+}
+
 commit_safely() {
-  set system config-management commit-confirm action reload 2>/dev/null
-  if commit-confirm $CONFIRM_MIN; then
+  if commit-confirm $CONFIRM_MIN no-prompt; then
     echo
     echo "  Committed with a $CONFIRM_MIN-minute rollback timer."
     echo "  1) From your laptop:  tools/scorecheck.sh <team#> steve '<password>'"
     echo "  2) If every service is UP:   configure; confirm; save; exit"
-    echo "  3) If anything broke: do nothing - it rolls back in $CONFIRM_MIN minutes"
-    echo "     (or roll back now: configure; rollback 1; exit - check 'show system commit' first)"
+    echo "  3) If anything broke: do nothing - the previous config reloads in $CONFIRM_MIN minutes"
   else
     echo "  commit failed; discarding changes"; discard
   fi
@@ -64,6 +72,7 @@ commit_safely() {
 
 harden() {
   configure
+  ensure_reload_action
   hdr "Router password"
   local p1 p2
   while true; do
@@ -116,6 +125,7 @@ firewall() {
   echo "to $SERVERS from ANY source. Everything else new from WAN is dropped."
   read -r -p "Continue? [y/N] " r; [[ $r =~ ^[Yy] ]] || exit 0
   configure
+  ensure_reload_action
   delete firewall ipv4 name CCDC-WAN-IN 2>/dev/null
   delete firewall group port-group CCDC-TCP 2>/dev/null
   delete firewall group port-group CCDC-UDP 2>/dev/null

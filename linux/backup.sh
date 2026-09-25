@@ -4,7 +4,7 @@
 # Usage: sudo ./backup.sh [dest_dir]
 set -uo pipefail
 
-[ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
+[ "$EUID" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
 
 TS=$(date +%Y%m%d-%H%M%S)
 DEST=${1:-/root/ccdc-backup}/$TS
