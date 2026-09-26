@@ -293,6 +293,8 @@ echo "  Report saved: $REPORT"
 if [ "$SHARE" = 1 ]; then
   hdr "Share report (--share)"
   sleep 1   # let tee finish writing the report
-  if [ -x "$HERE/share.sh" ]; then "$HERE/share.sh" "$REPORT" || note "upload failed; the report is still at $REPORT"
-  else note "share.sh not found in $HERE; download it there and run: $HERE/share.sh $REPORT"; fi
+  # Same folder (downloaded copies) or ../tools (a clone of the repo).
+  S=""; for c in "$HERE/share.sh" "$HERE/../tools/share.sh"; do [ -x "$c" ] && { S=$c; break; }; done
+  if [ -n "$S" ]; then "$S" "$REPORT" || note "upload failed; the report is still at $REPORT"
+  else note "share.sh not found in $HERE or $HERE/../tools; download it and run: share.sh $REPORT"; fi
 fi

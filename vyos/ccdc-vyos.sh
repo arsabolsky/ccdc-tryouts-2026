@@ -185,8 +185,9 @@ case $MODE in
   firewall) firewall ;;
   share)    # audit, then upload the report with share.sh (next to this script)
             tmp=$(mktemp); audit >"$tmp" 2>&1
-            S="$(cd "$(dirname "$0")" && pwd)/share.sh"
-            if [ -x "$S" ]; then "$S" "$tmp"; else echo "share.sh not found next to $0 (download it there)"; fi
+            D="$(cd "$(dirname "$0")" && pwd)"; S=""
+            for c in "$D/share.sh" "$D/../tools/share.sh"; do [ -x "$c" ] && { S=$c; break; }; done
+            if [ -n "$S" ]; then "$S" "$tmp"; else echo "share.sh not found next to $0 or in ../tools (download it there)"; fi
             rm -f "$tmp" ;;
   *) echo "usage: $0 {audit|harden|firewall|share}"; builtin exit 2 ;;
 esac

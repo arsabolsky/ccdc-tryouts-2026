@@ -118,7 +118,7 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 | `./backup.sh` | Take a fresh backup any time (harden also runs it) |
 | `./backup.sh --share` | Backup, then upload the state snapshot (listeners, services, users, crontabs, firewall) |
 
-Every `--share` needs `share.sh` in the same folder (the download command above puts it there). The link is public; passwords and hashes are redacted.
+Every `--share` looks for `share.sh` in the script's own folder (where the download command above puts it), then in `../tools/` (when you run from a clone of the repo). The link is public; passwords and hashes are redacted.
 
 Harden runs these steps in order:
 1. back up

@@ -56,7 +56,9 @@ log "Copy off-box:  scp -r root@<ip>:$DEST ."
 log "Restore one file:  tar -xzpf $DEST/files.tar.gz -C / etc/ssh/sshd_config"
 
 if [ "$SHARE" = 1 ]; then
-  S="$(cd "$(dirname "$0")" && pwd)/share.sh"
-  if [ -x "$S" ]; then "$S" "$DEST/state.txt" || log "upload failed"
-  else log "share.sh not found next to backup.sh; run: share.sh $DEST/state.txt"; fi
+  # Same folder (downloaded copies) or ../tools (a clone of the repo).
+  D="$(cd "$(dirname "$0")" && pwd)"; S=""
+  for c in "$D/share.sh" "$D/../tools/share.sh"; do [ -x "$c" ] && { S=$c; break; }; done
+  if [ -n "$S" ]; then "$S" "$DEST/state.txt" || log "upload failed"
+  else log "share.sh not found next to backup.sh or in ../tools; run: share.sh $DEST/state.txt"; fi
 fi

@@ -416,12 +416,15 @@ EOF
 step_share() {
   [ "$SHARE" = 1 ] || return 0
   hdr "Share log (--share)"
-  if [ ! -x "$HERE/share.sh" ]; then
-    note "share.sh not found in $HERE; download it there and run: $HERE/share.sh $LOG"
+  # Same folder (downloaded copies) or ../tools (a clone of the repo).
+  local s="" c
+  for c in "$HERE/share.sh" "$HERE/../tools/share.sh"; do [ -x "$c" ] && { s=$c; break; }; done
+  if [ -z "$s" ]; then
+    note "share.sh not found in $HERE or $HERE/../tools; download it and run: share.sh $LOG"
     return 0
   fi
   # share.sh redacts password values and hashes; the link is public.
-  "$HERE/share.sh" "$LOG" || note "upload failed; the log is still at $LOG"
+  "$s" "$LOG" || note "upload failed; the log is still at $LOG"
 }
 
 # ------------------------------------------------------------------ main ---
