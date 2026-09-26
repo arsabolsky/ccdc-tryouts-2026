@@ -130,7 +130,9 @@ function Invoke-Audit {
   }
 
   Hdr 'Services running from unusual paths'
-  Get-CimInstance Win32_Service | Where-Object { $_.PathName -match '\\(Users|Temp|ProgramData|AppData)\\|\\Windows\\Temp\\' } |
+  # Defender platform updates legitimately run from ProgramData\Microsoft\Windows Defender.
+  Get-CimInstance Win32_Service | Where-Object { $_.PathName -match '\\(Users|Temp|ProgramData|AppData)\\|\\Windows\\Temp\\' -and
+                                                 $_.PathName -notmatch '\\ProgramData\\Microsoft\\Windows Defender\\Platform\\' } |
     ForEach-Object { Flag "$($_.Name) -> $($_.PathName)" }
 
   if ($IsDC) {
@@ -143,7 +145,10 @@ function Invoke-Audit {
   Hdr 'Protected services'
   foreach ($s in $Candidates) {
     $svc = Get-Service $s -ErrorAction SilentlyContinue
-    if ($svc) { if ($svc.Status -eq 'Running') { Good "$s running" } else { Flag "$s is $($svc.Status)" } }
+    if (-not $svc) { continue }
+    if ($svc.Status -eq 'Running') { Good "$s running" }
+    elseif ($svc.StartType -eq 'Automatic') { Flag "$s is $($svc.Status) (start type Automatic)" }
+    else { Note "$s is $($svc.Status) (start type $($svc.StartType))" }
   }
 }
 
@@ -193,15 +198,18 @@ function Step-Backup {
   if (Test-Path 'C:\inetpub') { robocopy C:\inetpub (Join-Path $d 'inetpub') /E /R:0 /W:0 /NFL /NDL /NJH /NJS | Out-Null; Good 'C:\inetpub copied' }
   Good "backup: $d"
   # Record which services to protect.
-  $Candidates | Where-Object { (Get-Service $_ -ErrorAction SilentlyContinue).Status -eq 'Running' } |
-    Set-Content (Join-Path $State 'protected-services.txt')
+  $prot = @($Candidates | Where-Object { (Get-Service $_ -ErrorAction SilentlyContinue).Status -eq 'Running' })
+  [IO.File]::WriteAllLines((Join-Path $State 'protected-services.txt'), [string[]]$prot)
   Note "protected: $((Get-Content (Join-Path $State 'protected-services.txt')) -join ', ')"
 }
 
 function Step-Passwords {
   Hdr 'Passwords'
   if (-not (Ask 'Set one new password for all listed users and Administrator?')) { return }
-  while ($true) {
+  while ($env:CCDC_PASSWORD) {   # unattended runs: take the password from the environment
+    $a = ConvertTo-SecureString $env:CCDC_PASSWORD -AsPlainText -Force; $pa = $env:CCDC_PASSWORD; break
+  }
+  while (-not $env:CCDC_PASSWORD) {
     $a = Read-Host -AsSecureString '  New password'; $b = Read-Host -AsSecureString '  Again'
     $pa = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($a))
     $pb = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($b))
@@ -257,7 +265,8 @@ function Step-Users {
 
 function Step-Firewall {
   Hdr 'Firewall (inbound only; outbound stays allowed)'
-  $listen = (Get-Listeners).LocalPort | Where-Object { $_ -lt 49152 }
+  # Loopback-only listeners are unreachable from outside; do not open them.
+  $listen = (Get-Listeners | Where-Object { $_.LocalAddress -notin @('127.0.0.1','::1') }).LocalPort | Where-Object { $_ -lt 49152 }
   $tcp = ($ScoredTcp + $listen) | Sort-Object -Unique
   Note "TCP allowed from anywhere: $($tcp -join ' ')"
   Note "UDP allowed from anywhere: $($ScoredUdp -join ' ')"
@@ -293,7 +302,7 @@ function Step-Accessibility {
   foreach ($b in @('sethc.exe','utilman.exe','osk.exe','Magnify.exe','Narrator.exe','DisplaySwitch.exe')) {
     $k = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$b"
     if ((Get-ItemProperty $k -ErrorAction SilentlyContinue).Debugger) {
-      if (Ask "Remove Debugger hijack on $b?") { Remove-ItemProperty $k -Name Debugger; Good "removed $b hijack" }
+      if (Ask "Remove Debugger hijack on ${b}?") { Remove-ItemProperty $k -Name Debugger; Good "removed $b hijack" }
     }
   }
 }
@@ -306,7 +315,7 @@ function Step-Services {
   foreach ($s in @('Spooler','RemoteRegistry')) {
     $svc = Get-Service $s -ErrorAction SilentlyContinue
     if ($svc -and $svc.StartType -ne 'Disabled') {
-      if (Ask "Stop and disable $s?") { Stop-Service $s -Force; Set-Service $s -StartupType Disabled; Good "$s disabled" }
+      if (Ask "Stop and disable ${s}?") { Stop-Service $s -Force; Set-Service $s -StartupType Disabled; Good "$s disabled" }
     }
   }
   if ($IsDC) {
@@ -470,7 +479,16 @@ function Invoke-Hunt {
   }
 
   foreach ($e in (Ev @(4720))) { Flag "$($e.TimeCreated) account created: $(Field $e 'TargetUserName') by $(Field $e 'SubjectUserName')" }
-  foreach ($e in (Ev @(4728,4732,4756))) { Flag "$($e.TimeCreated) added to group $(Field $e 'TargetUserName'): $(Field $e 'MemberName') by $(Field $e 'SubjectUserName')" }
+  foreach ($e in (Ev @(4728,4732,4756))) {
+    $grp = Field $e 'TargetUserName'
+    if ($grp -eq 'None') { continue }   # every new local user joins "None"
+    $m = Field $e 'MemberName'
+    if (-not $m -or $m -eq '-') {        # local groups record only the SID
+      $sid = Field $e 'MemberSid'
+      try { $m = (New-Object Security.Principal.SecurityIdentifier($sid)).Translate([Security.Principal.NTAccount]).Value } catch { $m = $sid }
+    }
+    Flag "$($e.TimeCreated) added to group ${grp}: $m by $(Field $e 'SubjectUserName')"
+  }
   foreach ($e in (Ev @(4724))) { Note "$($e.TimeCreated) password reset: $(Field $e 'TargetUserName') by $(Field $e 'SubjectUserName')" }
   foreach ($e in (Ev @(4698))) { Flag "$($e.TimeCreated) scheduled task created: $(Field $e 'TaskName') by $(Field $e 'SubjectUserName')" }
   foreach ($e in (Ev @(7045) 'System')) { Flag "$($e.TimeCreated) service installed: $($e.Properties[0].Value) -> $($e.Properties[1].Value)" }
@@ -480,7 +498,7 @@ function Invoke-Hunt {
   Ev @(4688) | ForEach-Object { Field $_ 'CommandLine' } | Where-Object { $_ -match $sus } | Select-Object -First 25 -Unique | ForEach-Object { Flag "cmdline: $_" }
   Write-Host '  -- suspicious PowerShell script blocks (4104)'
   Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; Id=4104; StartTime=$since} -ErrorAction SilentlyContinue |
-    Where-Object { $_.Properties[2].Value -match $sus } | Select-Object -First 15 |
+    Where-Object { $_.Properties[2].Value -match $sus -and $_.Properties[2].Value -notmatch 'function Invoke-Hunt|Step-Watchdog|ccdc\.ps1' } | Select-Object -First 15 |
     ForEach-Object { Flag "$($_.TimeCreated) scriptblock: $(($_.Properties[2].Value -replace '\s+',' ').Substring(0, [Math]::Min(160, ($_.Properties[2].Value -replace '\s+',' ').Length)))" }
 
   Hdr 'Files changed recently in sensitive places'
