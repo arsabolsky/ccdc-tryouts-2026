@@ -136,9 +136,12 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
   - Clean boxes: no false alarms on Ubuntu 18.04 or Rocky 9, apart from two Docker-only artifacts.
   - Planted box: caught all 19 planted items. These included `passwd` swapped for a wrapper script, a changed binary, a PAM hook, a preload entry, a `sudo` alias, wiped or disabled history, brute force followed by a successful login in `auth.log`, web-shell requests and a binary in `/dev/shm`.
   - Tampered `id`: the root check uses bash's `$EUID` instead of `id -u`, so the scripts still run when `id` has been tampered with.
-- **Windows:** parsed with the PowerShell parser and linted with PSScriptAnalyzer. Port matching and service-path parsing have unit tests. It has **not** been run on a real Server 2016 box, so run the audit or hunt first.
-- **VyOS:**
-  - Every `set`/`delete` path in the script was validated against the real config schema, extracted from a current VyOS rolling image.
-  - Protocol values were checked with VyOS's own validator.
-  - Reading VyOS's source showed that `commit-confirm` defaults to *rebooting* on rollback. The script now commits `action reload` first, so an unconfirmed change only reloads the previous config.
-  - A full boot test in a container was not possible, because VyOS's config daemon hangs under amd64 emulation. The script has not been run on a live router.
+- **Windows:** run live on Windows 11: audit, hunt, harden (run twice, to check that a repeat run is clean), watchdog recovery of a stopped and disabled service, and `RestoreFirewall`.
+  - The script refuses to run when it is not elevated.
+  - Code paths specific to a domain controller (AD users, groups, DNS zones) and the IIS app-pool watchdog were **not** run, because there was no Windows Server or IIS. On lapis, run the audit first.
+- **VyOS:** run live on a VyOS rolling router under QEMU:
+  - audit, harden and firewall
+  - the unconfirmed-change rollback, which reloads the previous config without rebooting
+  - `confirm` then `save`, and repeat runs
+  - a real traffic test through the 1:1 NAT: scored ports allowed, other ports blocked, passive FTP works
+  - Every config path was also checked against the VyOS schema.
