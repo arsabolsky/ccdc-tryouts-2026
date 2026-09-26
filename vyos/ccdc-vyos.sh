@@ -72,7 +72,9 @@ ensure_reload_action() {
 }
 
 commit_safely() {
-  if commit-confirm $CONFIRM_MIN no-prompt && ! cli-shell-api sessionChanged; then
+  # No "no-prompt": VyOS 2025.11 does not know it and passes it to commit, which
+  # then fails. VyOS asks "Proceed? [Y/n]" itself; answer y.
+  if commit-confirm $CONFIRM_MIN && ! cli-shell-api sessionChanged; then
     echo
     echo "  Committed with a $CONFIRM_MIN-minute rollback timer."
     echo "  1) From your laptop:  tools/scorecheck.sh <team#> steve '<password>'"
