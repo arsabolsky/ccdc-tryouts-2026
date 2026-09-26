@@ -24,6 +24,13 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 
+# Without elevation most checks silently return nothing and every change fails.
+$me = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  Write-Host 'Not elevated. Right-click PowerShell > Run as administrator, then run this again.' -ForegroundColor Red
+  exit 1
+}
+
 $Admins   = @('steve','alex')
 $Listed   = @('steve','alex','enderman','creeper','villager','zombie','enderdragon','irongolem','chickenjockey','ghast')
 $BuiltIn  = @('Administrator','Guest','krbtgt','DefaultAccount','WDAGUtilityAccount')

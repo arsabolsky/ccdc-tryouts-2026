@@ -308,15 +308,19 @@ step_firewall() {
   # Keep the very first snapshot so a second run cannot overwrite it.
   [ -f "$STATE/iptables-before.rules" ] || iptables-save >"$STATE/iptables-before.rules" 2>/dev/null
   if [ $FAM = rpm ] && systemctl is-active -q firewalld; then
-    firewall-cmd --list-all >"$STATE/firewalld-before.txt"
-    for p in $tcp; do firewall-cmd -q --permanent --add-port="$p/tcp"; done
+    [ -f "$STATE/firewalld-before.txt" ] || firewall-cmd --list-all >"$STATE/firewalld-before.txt"
+    # Record only what we add, so restore-firewall removes exactly that.
     # The ftp service loads the FTP helper so passive data connections work.
-    firewall-cmd -q --permanent --add-service=ftp
-    [ -n "$pasv" ] && firewall-cmd -q --permanent --add-port="${pasv/:/-}/tcp"
-    for p in $udp; do firewall-cmd -q --permanent --add-port="$p/udp"; done
+    local spec
+    for spec in $(for p in $tcp; do echo "port=$p/tcp"; done; for p in $udp; do echo "port=$p/udp"; done
+                  [ -n "$pasv" ] && echo "port=${pasv/:/-}/tcp"; echo service=ftp); do
+      firewall-cmd -q --permanent --query-"${spec%%=*}"="${spec#*=}" && continue
+      firewall-cmd -q --permanent --add-"${spec%%=*}"="${spec#*=}" && echo "$spec" >>"$STATE/firewalld-added.txt"
+    done
     firewall-cmd -q --reload && good "firewalld updated (ports added, nothing removed)"
     return
   fi
+  command -v iptables >/dev/null || { flag "firewalld is not running and there is no iptables command; nothing applied"; return; }
   modprobe nf_conntrack_ftp 2>/dev/null
   iptables -N CCDC-IN 2>/dev/null || iptables -F CCDC-IN
   iptables -A CCDC-IN -i lo -j ACCEPT
@@ -331,7 +335,33 @@ step_firewall() {
   iptables -C INPUT -j CCDC-IN 2>/dev/null || iptables -I INPUT 1 -j CCDC-IN
   iptables -A CCDC-IN -j DROP
   good "iptables applied. Undo: sudo $HERE/harden.sh restore-firewall"
-  [ $FAM = deb ] && command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1
+  if command -v netfilter-persistent >/dev/null; then netfilter-persistent save >/dev/null 2>&1
+  else persist_iptables; fi
+}
+
+persist_iptables() {  # plain iptables rules are lost on reboot; re-add CCDC-IN at boot
+  local rules=$STATE/ccdc-firewall.rules
+  { echo '*raw'; echo '-A PREROUTING -p tcp --dport 21 -j CT --helper ftp'; echo COMMIT
+    echo '*filter'; echo ':CCDC-IN - [0:0]'; iptables -S CCDC-IN | grep '^-A'
+    echo '-I INPUT 1 -j CCDC-IN'; echo COMMIT; } >"$rules"
+  cat >/etc/systemd/system/ccdc-firewall.service <<EOF
+[Unit]
+Description=CCDC inbound firewall from harden.sh (undo: harden.sh restore-firewall)
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-$(command -v modprobe || echo /sbin/modprobe) nf_conntrack_ftp
+ExecStart=$(command -v iptables-restore) -n $rules
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload && systemctl enable ccdc-firewall.service >/dev/null 2>&1 \
+    && good "rules re-applied at boot by ccdc-firewall.service" \
+    || flag "could not enable ccdc-firewall.service: the rules will be lost on reboot"
 }
 
 step_verify() {
@@ -413,8 +443,18 @@ case $MODE in
       iptables-restore <"$STATE/iptables-before.rules" && good "original iptables rules restored"
     fi
     good "script firewall rules removed"
-    [ $FAM = deb ] && command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1
-    if [ -f "$STATE/firewalld-before.txt" ]; then
+    if [ -f /etc/systemd/system/ccdc-firewall.service ]; then
+      systemctl disable ccdc-firewall.service >/dev/null 2>&1
+      rm -f /etc/systemd/system/ccdc-firewall.service; systemctl daemon-reload
+      good "boot-time rules removed (ccdc-firewall.service)"
+    fi
+    command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1
+    if [ -s "$STATE/firewalld-added.txt" ] && systemctl is-active -q firewalld; then
+      while read -r spec; do
+        firewall-cmd -q --permanent --remove-"${spec%%=*}"="${spec#*=}" && info "firewalld: removed ${spec#*=}"
+      done <"$STATE/firewalld-added.txt"
+      firewall-cmd -q --reload && rm -f "$STATE/firewalld-added.txt" && good "firewalld back to its pre-harden ports/services"
+    elif [ -f "$STATE/firewalld-before.txt" ]; then
       note "firewalld: ports were only added. Remove with firewall-cmd --permanent --remove-port=P/tcp"
     fi ;;
   *) echo "usage: $0 {audit|harden [--yes] [--firewall]|restore-firewall}"; exit 2 ;;

@@ -24,7 +24,9 @@ bad()  { printf '  %-28s %sDOWN%s %s\n'   "$1" "$R" "$N" "${2:-}"; }
 warn() { printf '  %-28s %sWARN%s %s\n'   "$1" "$Y" "$N" "${2:-}"; }
 
 port_open() {  # host port
-  if command -v nc >/dev/null 2>&1; then nc -z -w "$T" "$1" "$2" >/dev/null 2>&1
+  # macOS nc ignores -w while connecting (a dead host takes ~75s); -G bounds it.
+  if [ "$(uname)" = Darwin ]; then nc -z -G "$T" -w "$T" "$1" "$2" >/dev/null 2>&1
+  elif command -v nc >/dev/null 2>&1; then nc -z -w "$T" "$1" "$2" >/dev/null 2>&1
   else timeout "$T" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; fi
 }
 

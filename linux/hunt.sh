@@ -41,14 +41,18 @@ CRITICAL="passwd su sudo login sshd ssh chpasswd useradd usermod userdel chage g
           ps ls ss netstat top find lsof bash sh dash systemctl crontab id who w last
           getent kill pkill cat grep awk sed tar curl wget ip iptables nft"
 
+alt_path() {  # merged /usr: dpkg may list /usr/bin/x as /bin/x (or the reverse)
+  case $1 in /usr/bin/*|/usr/sbin/*|/usr/lib*) echo "${1#/usr}";; /bin/*|/sbin/*|/lib*) echo "/usr$1";; *) echo "$1";; esac
+}
 owner_pkg() {  # path -> package name or empty
-  if [ $FAM = deb ]; then dpkg -S "$1" 2>/dev/null | head -1 | cut -d: -f1
+  if [ $FAM = deb ]; then
+    { dpkg -S "$1" 2>/dev/null || dpkg -S "$(alt_path "$1")" 2>/dev/null; } | head -1 | cut -d: -f1
   else rpm -qf "$1" 2>/dev/null | grep -v 'not owned' | head -1; fi
 }
 verify_file() {  # path -> prints the verify line if the file differs from its package
   if [ $FAM = deb ]; then
     local pkg; pkg=$(owner_pkg "$1"); [ -n "$pkg" ] || return
-    dpkg --verify "$pkg" 2>/dev/null | awk -v f="$1" '$NF==f && $2!="c"'
+    dpkg --verify "$pkg" 2>/dev/null | awk -v f="$1" -v g="$(alt_path "$1")" '($NF==f || $NF==g) && $2!="c"'
   else
     rpm -Vf "$1" 2>/dev/null | awk -v f="$1" '$NF==f && $2!="c"'
   fi
@@ -56,7 +60,7 @@ verify_file() {  # path -> prints the verify line if the file differs from its p
 
 pkg_unmodified() {  # file -> 0 if a package owns it and it is byte-for-byte unchanged (config files included)
   local pkg; pkg=$(owner_pkg "$1"); [ -n "$pkg" ] || return 1
-  if [ $FAM = deb ]; then [ -z "$(dpkg --verify "$pkg" 2>/dev/null | awk -v f="$1" '$NF==f')" ]
+  if [ $FAM = deb ]; then [ -z "$(dpkg --verify "$pkg" 2>/dev/null | awk -v f="$1" -v g="$(alt_path "$1")" '$NF==f || $NF==g')" ]
   else [ -z "$(rpm -Vf "$1" 2>/dev/null | awk -v f="$1" '$NF==f')" ]; fi
 }
 drop_distro_defaults() {  # stdin "file:line:text" -> only lines from edited or unpackaged files
@@ -83,7 +87,7 @@ hunt_binaries() {
     fi
     line=$(verify_file "$real"); [ -n "$line" ] || line=$(verify_file "$p")
     [ -n "$line" ] && flag "$c differs from its package: $line"
-    [ -u "$real" ] && case $c in passwd|su|sudo|chage|gpasswd|mount|umount|newgrp|chsh|chfn|pkexec) ;; *) flag "$c ($real) is setuid";; esac
+    [ -u "$real" ] && case $c in passwd|su|sudo|chage|gpasswd|mount|umount|newgrp|chsh|chfn|pkexec|crontab) ;; *) flag "$c ($real) is setuid";; esac
   done
   good "checked: $(echo $CRITICAL | wc -w) commands (lines above are problems)"
 
@@ -117,7 +121,7 @@ hunt_binaries() {
   if [ $FULL = 1 ]; then
     hdr "Full package verification (binaries and libraries only)"
     if [ $FAM = deb ]; then dpkg --verify 2>/dev/null; else rpm -Va 2>/dev/null; fi \
-      | awk '$2!="c"' | grep -E ' /(usr/)?(s?bin|lib[^ ]*)/' | grep -v '^\.\.\.\.\.\.\.T' | sed 's/^/  [!!] /'
+      | awk '$2!="c"' | grep -E ' /(usr/)?(s?bin|lib[^ ]*)/' | grep -v '^\.\.\.\.\.\.\.T' | while read -r l; do flag "$l"; done
   fi
 }
 
@@ -251,7 +255,8 @@ hunt_logs() {
   for wl in /var/log/apache2/access.log /var/log/httpd/access_log /var/log/nginx/access.log; do
     [ -s "$wl" ] || continue
     echo "  -- $wl: top clients"; awk '{print $1}' "$wl" | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
-    grep -iE 'cmd=|exec=|system\(|passthru|shell_exec|base64_|/\.\./|%2e%2e|union.*select|/etc/passwd|\.php\?[a-z]=|wget|curl|nikto|sqlmap|gobuster|dirb' "$wl" \
+    # wget/curl only inside the request line: a curl user agent is normal (scorecheck.sh uses curl).
+    grep -iE 'cmd=|exec=|system\(|passthru|shell_exec|base64_|/\.\./|%2e%2e|union.*select|/etc/passwd|\.php\?[a-z]=|"[a-z]+ [^"]*(wget|curl)|nikto|sqlmap|gobuster|dirb' "$wl" \
       | tail -20 | while read -r l; do flag "${l:0:180}"; done
     echo "  -- POSTs to scripts"; grep -E '"POST [^"]*\.(php|cgi|jsp|aspx?)' "$wl" | awk '{print $1, $7}' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
   done
