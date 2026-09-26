@@ -5,6 +5,7 @@
 #   sudo ./harden.sh harden                asks before every step
 #   sudo ./harden.sh harden --yes          runs the safe steps without asking
 #   sudo ./harden.sh harden --yes --firewall   ...also applies the host firewall
+#   add --share to upload this run's log with share.sh (redacted, public link)
 #   sudo ./harden.sh restore-firewall      undo the firewall step
 #
 # Rules this script follows (from the team packet):
@@ -14,8 +15,8 @@
 set -uo pipefail
 
 MODE=${1:-audit}; shift || true
-YES=0; FIREWALL=0
-for a in "$@"; do case $a in --yes) YES=1;; --firewall) FIREWALL=1;; esac; done
+YES=0; FIREWALL=0; SHARE=0
+for a in "$@"; do case $a in --yes) YES=1;; --firewall) FIREWALL=1;; --share) SHARE=1;; esac; done
 
 [ "$EUID" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
 
@@ -412,6 +413,17 @@ EOF
     && good "watchdog on (log: /var/log/ccdc-watchdog.log)"
 }
 
+step_share() {
+  [ "$SHARE" = 1 ] || return 0
+  hdr "Share log (--share)"
+  if [ ! -x "$HERE/share.sh" ]; then
+    note "share.sh not found in $HERE; download it there and run: $HERE/share.sh $LOG"
+    return 0
+  fi
+  # share.sh redacts password values and hashes; the link is public.
+  "$HERE/share.sh" "$LOG" || note "upload failed; the log is still at $LOG"
+}
+
 # ------------------------------------------------------------------ main ---
 case $MODE in
   audit)
@@ -433,7 +445,8 @@ case $MODE in
     hdr "Done"
     info "Backup: ${BK:-none}   Log: $LOG"
     info "Next: run 'sudo $0 audit' and review every [!!] line."
-    info "Remember to submit the PCR list above in Quotient." ;;
+    info "Remember to submit the PCR list above in Quotient."
+    step_share ;;
   restore-firewall)
     # Remove what this script added, then load the original snapshot.
     while iptables -D INPUT -j CCDC-IN 2>/dev/null; do :; done

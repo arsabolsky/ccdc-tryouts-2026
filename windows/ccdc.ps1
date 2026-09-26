@@ -4,6 +4,7 @@ ccdc.ps1 - audit and harden Windows Server 2016 (domain controller or member).
   .\ccdc.ps1                      read-only audit (default)
   .\ccdc.ps1 -Mode Harden         asks before every step
   .\ccdc.ps1 -Mode Harden -Yes    runs the safe steps without asking
+  add -Share to Harden or Hunt to upload the run's log with share.ps1 (redacted, public link)
   .\ccdc.ps1 -Mode Hunt           read-only hunt: signatures, PowerShell history, event logs
   .\ccdc.ps1 -Mode Hunt -Hours 3  ...only look at the last 3 hours of events
   .\ccdc.ps1 -Mode Watch          one watchdog pass (the installed task runs this)
@@ -20,7 +21,8 @@ Rules this script follows (from the team packet):
 param(
   [ValidateSet('Audit','Harden','Hunt','Watch','RestoreFirewall')][string]$Mode = 'Audit',
   [switch]$Yes,
-  [int]$Hours = 24
+  [int]$Hours = 24,
+  [switch]$Share
 )
 $ErrorActionPreference = 'Continue'
 
@@ -533,3 +535,10 @@ switch ($Mode) {
   }
 }
 if ($Mode -ne 'Watch') { Stop-Transcript | Out-Null }
+
+# Upload after the transcript is closed so the whole log is included.
+if ($Share -and $Mode -in @('Harden','Hunt')) {
+  $sp = Join-Path $PSScriptRoot 'share.ps1'
+  if (Test-Path $sp) { & $sp $Log }
+  else { Write-Host "  share.ps1 not found next to ccdc.ps1. Download it, then run: .\share.ps1 $Log" -ForegroundColor Yellow }
+}

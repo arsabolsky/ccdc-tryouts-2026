@@ -111,6 +111,7 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 | `./harden.sh harden` | Asks y/N before each step |
 | `./harden.sh harden --yes` | Runs every safe step without asking, except the firewall |
 | `./harden.sh harden --yes --firewall` | Same, plus the inbound firewall |
+| `... --share` | Add to any harden command: upload this run's log with `share.sh` at the end and print the link (needs `share.sh` in the same folder) |
 | `./harden.sh restore-firewall` | Undo the firewall step completely |
 | `./backup.sh` | Take a fresh backup any time (harden also runs it) |
 
@@ -134,6 +135,7 @@ Harden runs these steps in order:
 | `.\ccdc.ps1 -Mode Hunt [-Hours 1]` | Read-only hunt: signatures, sticky-keys trick, PowerShell history, event logs |
 | `.\ccdc.ps1 -Mode Harden` | Asks y/N before each step |
 | `.\ccdc.ps1 -Mode Harden -Yes` | Runs every step without asking (still prompts once for the password) |
+| `... -Share` | Add to Harden or Hunt: upload the run's log with `share.ps1` at the end and print the link (needs `share.ps1` in the same folder) |
 | `.\ccdc.ps1 -Mode RestoreFirewall` | Put the firewall back the way it was before harden |
 
 Harden runs these steps in order:
