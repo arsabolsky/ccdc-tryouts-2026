@@ -68,6 +68,17 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 7. **Hunt every hour:** `sudo ./hunt.sh --since 1` and `.\ccdc.ps1 -Mode Hunt -Hours 1`, plus `splunk/searches.md`.
    The Linux hunt compares binaries against the 10:00 baseline, so a swapped `passwd` or `sshd` shows up as "changed since baseline".
 
+## Sharing a report or config
+
+Pastes are public to anyone with the link. By default secrets are redacted.
+```bash
+curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/share.sh && chmod +x share.sh
+./share.sh /root/ccdc-backup/hunt-*.txt            # one link per file
+./share.sh --one /etc/ssh/sshd_config /etc/vsftpd.conf
+sudo ./hunt.sh | ./share.sh -
+```
+On Windows: `.\share.ps1 C:\ccdc-backup\ccdc-*.log`
+
 ## Recovery
 
 | Problem | Fix |
@@ -92,6 +103,7 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 | `windows/ccdc.ps1` | Audit, hunt and harden Server 2016: DC-aware, with an IIS and service watchdog task |
 | `vyos/ccdc-vyos.sh` | Router audit and hardening, using commit-confirm |
 | `tools/scorecheck.sh` | Checks scored services from outside, like the scoring engine |
+| `tools/share.sh` | Upload reports, logs or configs to a paste site (paste.rs by default, no account). Refuses shadow files and private keys and blanks passwords unless `--raw` |
 | `splunk/searches.md` | Hunting searches for Windows and Linux logs |
 
 ## What the hunt checks
