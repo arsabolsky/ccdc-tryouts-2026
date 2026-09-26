@@ -92,6 +92,7 @@ If the script says "Not elevated", you opened a normal PowerShell. Reopen it as 
 **VyOS (bedrock), as vyos:**
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/vyos/ccdc-vyos.sh && chmod +x ccdc-vyos.sh
+curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/share.sh && chmod +x share.sh
 ```
 
 **Laptop:**
@@ -107,13 +108,17 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 |---|---|
 | `./hunt.sh` | Read-only hunt. Its first run saves a hash baseline of critical binaries |
 | `./hunt.sh --since 1` | Only look at the last hour. Add `--full` to verify every package (about 30 s) |
+| `./hunt.sh --share` | Hunt, then upload the report and print the link |
 | `./harden.sh audit` | Read-only report: users, admins, keys, sshd, cron, listeners, login settings |
 | `./harden.sh harden` | Asks y/N before each step |
 | `./harden.sh harden --yes` | Runs every safe step without asking, except the firewall |
 | `./harden.sh harden --yes --firewall` | Same, plus the inbound firewall |
-| `... --share` | Add to any harden command: upload this run's log with `share.sh` at the end and print the link (needs `share.sh` in the same folder) |
+| `... --share` | Add to `audit` or any harden command: upload this run's log at the end and print the link |
 | `./harden.sh restore-firewall` | Undo the firewall step completely |
 | `./backup.sh` | Take a fresh backup any time (harden also runs it) |
+| `./backup.sh --share` | Backup, then upload the state snapshot (listeners, services, users, crontabs, firewall) |
+
+Every `--share` needs `share.sh` in the same folder (the download command above puts it there). The link is public; passwords and hashes are redacted.
 
 Harden runs these steps in order:
 1. back up
@@ -135,7 +140,7 @@ Harden runs these steps in order:
 | `.\ccdc.ps1 -Mode Hunt [-Hours 1]` | Read-only hunt: signatures, sticky-keys trick, PowerShell history, event logs |
 | `.\ccdc.ps1 -Mode Harden` | Asks y/N before each step |
 | `.\ccdc.ps1 -Mode Harden -Yes` | Runs every step without asking (still prompts once for the password) |
-| `... -Share` | Add to Harden or Hunt: upload the run's log with `share.ps1` at the end and print the link (needs `share.ps1` in the same folder) |
+| `... -Share` | Add to the audit, Hunt or Harden: upload the run's log with `share.ps1` at the end and print the link (needs `share.ps1` in the same folder) |
 | `.\ccdc.ps1 -Mode RestoreFirewall` | Put the firewall back the way it was before harden |
 
 Harden runs these steps in order:
@@ -158,6 +163,7 @@ Harden runs these steps in order:
 | `./ccdc-vyos.sh audit` | Read-only: users, keys, NAT, firewall, services, scheduled tasks, boot scripts |
 | `./ccdc-vyos.sh harden` | Router password, removes extra users/keys/tasks (asks for each), SSH on the LAN only, HTTPS API off |
 | `./ccdc-vyos.sh firewall` | WAN to LAN filter that allows scored ports from anywhere and drops everything else new |
+| `./ccdc-vyos.sh share` | Run the audit and upload it (needs `share.sh` next to the script) |
 
 After `harden` or `firewall`, you have 10 minutes:
 - **Everything UP in scorecheck:** `configure; confirm; save; exit`
@@ -176,6 +182,7 @@ After `harden` or `firewall`, you have 10 minutes:
 | After harden changes the passwords | `./scorecheck.sh x steve '<new password>'` |
 | All day, in its own terminal | `WATCH=60 ./scorecheck.sh x steve '<new password>'` |
 | To also test DNS and LDAP | `DOMAIN=<ad.domain> ./scorecheck.sh x steve '<password>'` |
+| One pass, then upload the results | `SHARE=1 ./scorecheck.sh x steve '<password>'` (needs `share.sh` next to it) |
 
 - `x` is your team number. It sets the IPs: team 12 means iron is `192.168.212.10`, lapis `.11`, redstone `.12`.
 - The username and password are what it logs in with for FTP and POP3, just like the scorer. Use the current password: an old one makes FTP and POP3 look DOWN when they're fine.

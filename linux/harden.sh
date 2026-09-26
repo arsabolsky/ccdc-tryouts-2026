@@ -5,7 +5,7 @@
 #   sudo ./harden.sh harden                asks before every step
 #   sudo ./harden.sh harden --yes          runs the safe steps without asking
 #   sudo ./harden.sh harden --yes --firewall   ...also applies the host firewall
-#   add --share to upload this run's log with share.sh (redacted, public link)
+#   add --share (audit or harden) to upload this run's log with share.sh (redacted, public link)
 #   sudo ./harden.sh restore-firewall      undo the firewall step
 #
 # Rules this script follows (from the team packet):
@@ -428,7 +428,8 @@ step_share() {
 case $MODE in
   audit)
     audit_all
-    echo; info "Audit only. Nothing was changed. Log: $LOG" ;;
+    echo; info "Audit only. Nothing was changed. Log: $LOG"
+    step_share ;;
   harden)
     [ "$YES" = 1 ] && info "Auto mode: safe steps run without prompts." || info "Confirm mode: you approve each step."
     step_backup

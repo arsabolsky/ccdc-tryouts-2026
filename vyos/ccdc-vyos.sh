@@ -4,6 +4,7 @@
 #   ./ccdc-vyos.sh audit            read-only report (default)
 #   ./ccdc-vyos.sh harden           password, SSH on LAN only, remove extra users/keys/tasks
 #   ./ccdc-vyos.sh firewall         add a WAN->LAN filter that allows scored ports
+#   ./ccdc-vyos.sh share            run the audit and upload it with share.sh (redacted, public link)
 #
 # Every change is applied with commit-confirm: if you do not type
 #   configure; confirm; save; exit
@@ -182,5 +183,10 @@ case $MODE in
   audit)    audit ;;
   harden)   harden ;;
   firewall) firewall ;;
-  *) echo "usage: $0 {audit|harden|firewall}"; builtin exit 2 ;;
+  share)    # audit, then upload the report with share.sh (next to this script)
+            tmp=$(mktemp); audit >"$tmp" 2>&1
+            S="$(cd "$(dirname "$0")" && pwd)/share.sh"
+            if [ -x "$S" ]; then "$S" "$tmp"; else echo "share.sh not found next to $0 (download it there)"; fi
+            rm -f "$tmp" ;;
+  *) echo "usage: $0 {audit|harden|firewall|share}"; builtin exit 2 ;;
 esac

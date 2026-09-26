@@ -5,16 +5,18 @@
 #   sudo ./hunt.sh                 everything, "recent" = last 24 hours
 #   sudo ./hunt.sh --since 3       "recent" = last 3 hours
 #   sudo ./hunt.sh --full          also verify every installed package (slow)
+#   add --share to upload the report with share.sh (redacted, public link)
 #
 # Checks: tampered binaries (package checksums, wrapper scripts, hash baseline),
 # PAM and shell hijacks, immutable files, shell history, login and auth logs,
 # log tampering, web logs, recently changed files.
 set -uo pipefail
 
-SINCE=24; FULL=0
+SINCE=24; FULL=0; SHARE=0
 while [ $# -gt 0 ]; do
-  case $1 in --since) SINCE=${2:?}; shift;; --full) FULL=1;; esac; shift
+  case $1 in --since) SINCE=${2:?}; shift;; --full) FULL=1;; --share) SHARE=1;; esac; shift
 done
+HERE=$(cd "$(dirname "$0")" && pwd)
 [ "$EUID" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
 
 STATE=/root/ccdc-backup
@@ -287,3 +289,10 @@ FLAGS=$(wc -l <"$FLAGFILE" | tr -d ' ')
 if [ "$FLAGS" -gt 0 ]; then flag "$FLAGS item(s) flagged. Screenshot the evidence before removing anything (for incident reports)."
 else good "nothing flagged"; fi
 echo "  Report saved: $REPORT"
+
+if [ "$SHARE" = 1 ]; then
+  hdr "Share report (--share)"
+  sleep 1   # let tee finish writing the report
+  if [ -x "$HERE/share.sh" ]; then "$HERE/share.sh" "$REPORT" || note "upload failed; the report is still at $REPORT"
+  else note "share.sh not found in $HERE; download it there and run: $HERE/share.sh $REPORT"; fi
+fi

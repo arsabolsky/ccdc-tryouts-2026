@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # backup.sh - snapshot configs and service data on Ubuntu 18.04 / Rocky 9.
 # Read-only on the system except for writing the backup directory.
-# Usage: sudo ./backup.sh [dest_dir]
+# Usage: sudo ./backup.sh [--share] [dest_dir]
+#   --share uploads the state snapshot (state.txt) with share.sh (redacted, public link)
 set -uo pipefail
 
 [ "$EUID" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }
+SHARE=0; [ "${1:-}" = --share ] && { SHARE=1; shift; }
 
 TS=$(date +%Y%m%d-%H%M%S)
 DEST=${1:-/root/ccdc-backup}/$TS
@@ -52,3 +54,9 @@ fi
 log "Done: $DEST"
 log "Copy off-box:  scp -r root@<ip>:$DEST ."
 log "Restore one file:  tar -xzpf $DEST/files.tar.gz -C / etc/ssh/sshd_config"
+
+if [ "$SHARE" = 1 ]; then
+  S="$(cd "$(dirname "$0")" && pwd)/share.sh"
+  if [ -x "$S" ]; then "$S" "$DEST/state.txt" || log "upload failed"
+  else log "share.sh not found next to backup.sh; run: share.sh $DEST/state.txt"; fi
+fi

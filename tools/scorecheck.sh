@@ -4,6 +4,7 @@
 #
 # Usage: ./scorecheck.sh <team#> [user] [password]      one pass
 #        WATCH=60 ./scorecheck.sh <team#> steve 'pw'   repeat every 60s
+#        SHARE=1 ./scorecheck.sh <team#> steve 'pw'    one pass, then upload the results with share.sh
 # Env overrides: IRON, LAPIS, REDSTONE (IPs), DOMAIN (AD DNS name for DNS test)
 set -u
 
@@ -18,7 +19,8 @@ T=${T:-5}   # per-check timeout (seconds)
 STATE_DIR=${STATE_DIR:-$HOME/.scorecheck}
 mkdir -p "$STATE_DIR"
 
-if [ -t 1 ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; N=$'\e[0m'; else G='' R='' Y='' N=''; fi
+# No colour codes when sharing, so the paste stays readable.
+if [ -t 1 ] && [ -z "${SHARE:-}" ]; then G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; N=$'\e[0m'; else G='' R='' Y='' N=''; fi
 ok()   { printf '  %-28s %sUP%s   %s\n'   "$1" "$G" "$N" "${2:-}"; }
 bad()  { printf '  %-28s %sDOWN%s %s\n'   "$1" "$R" "$N" "${2:-}"; }
 warn() { printf '  %-28s %sWARN%s %s\n'   "$1" "$Y" "$N" "${2:-}"; }
@@ -145,6 +147,12 @@ run_once() {
 
 if [ -n "${WATCH:-}" ]; then
   while true; do clear 2>/dev/null; run_once; sleep "$WATCH"; done
+elif [ -n "${SHARE:-}" ]; then
+  # One pass, then upload the results with share.sh (next to this script).
+  out=$(mktemp); run_once | tee "$out"
+  S="$(cd "$(dirname "$0")" && pwd)/share.sh"
+  if [ -x "$S" ]; then "$S" "$out"; else echo "share.sh not found next to scorecheck.sh"; fi
+  rm -f "$out"
 else
   run_once
 fi
