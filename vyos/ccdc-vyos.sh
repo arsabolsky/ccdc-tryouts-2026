@@ -11,9 +11,11 @@
 # Test with tools/scorecheck.sh from outside before confirming.
 #
 # Run as the vyos user:  chmod +x ccdc-vyos.sh && ./ccdc-vyos.sh audit
-source /opt/vyatta/etc/functions/script-template
-
+# Read $1 first: sourcing script-template runs "set -o ignoreeof 1",
+# which replaces the positional parameters with "1".
 MODE=${1:-audit}
+source /opt/vyatta/etc/functions/script-template
+# script-template aliases "exit" to "leave config session"; use builtin exit.
 CONFIRM_MIN=10
 LAN_IP=172.16.1.1
 SERVERS="172.16.1.10 172.16.1.11 172.16.1.12"
@@ -29,7 +31,7 @@ audit() {
   hdr "Interfaces (WAN guess: ${WAN_IF:-unknown})"
   run show interfaces
   hdr "Login users and keys (should be only: vyos, no unknown keys)"
-  cfg | grep -E 'system login user' | grep -Ev 'encrypted-password|plaintext-password'
+  cfg | grep -E 'system login user' | sed -E 's/(-password) .*/\1 <hidden>/'
   hdr "NAT rules (expect 1:1 NAT for .10 .11 .12 only)"
   cfg | grep -E '^set nat '
   hdr "Firewall"
@@ -47,6 +49,17 @@ audit() {
   who
 }
 
+check_pending() {
+  # With a confirm pending, or a failed rollback unit left behind, commit-confirm
+  # prints an error, commits nothing and still returns 0.
+  if systemctl is-active --quiet commit-confirm.timer; then
+    echo "A commit-confirm is still pending. Confirm it (configure; confirm; save; exit)"
+    echo "or wait for it to reload, then run this again."
+    builtin exit 1
+  fi
+  sudo systemctl reset-failed commit-confirm.service commit-confirm.timer >/dev/null 2>&1
+}
+
 ensure_reload_action() {
   # commit-confirm reads the rollback action from the RUNNING config, and the
   # default is "reboot". Commit "reload" on its own first so an unconfirmed
@@ -58,7 +71,7 @@ ensure_reload_action() {
 }
 
 commit_safely() {
-  if commit-confirm $CONFIRM_MIN no-prompt; then
+  if commit-confirm $CONFIRM_MIN no-prompt && ! cli-shell-api sessionChanged; then
     echo
     echo "  Committed with a $CONFIRM_MIN-minute rollback timer."
     echo "  1) From your laptop:  tools/scorecheck.sh <team#> steve '<password>'"
@@ -71,6 +84,7 @@ commit_safely() {
 }
 
 harden() {
+  check_pending
   configure
   ensure_reload_action
   hdr "Router password"
@@ -84,10 +98,11 @@ harden() {
   set system login user vyos authentication plaintext-password "$p1"
 
   hdr "Extra login users"
+  local gone=""
   for u in $(cfg | awk '$1=="set" && $3=="login" && $4=="user" {print $5}' | tr -d "'" | sort -u); do
     [ "$u" = vyos ] && continue
     read -r -p "  Delete router login user '$u'? [y/N] " r
-    [[ $r =~ ^[Yy] ]] && delete system login user "$u" && echo "  deleted $u"
+    [[ $r =~ ^[Yy] ]] && delete system login user "$u" && gone="$gone $u" && echo "  deleted $u"
   done
 
   hdr "SSH keys on vyos user"
@@ -98,7 +113,7 @@ harden() {
 
   hdr "SSH: listen on LAN only ($LAN_IP)"
   if cfg | grep -q '^set service ssh'; then
-    delete service ssh listen-address 2>/dev/null
+    delete service ssh listen-address >/dev/null 2>&1
     set service ssh listen-address $LAN_IP
     echo "  set (manage the router from the Proxmox console or from a LAN box)"
   fi
@@ -116,20 +131,25 @@ harden() {
     [[ $r =~ ^[Yy] ]] && delete system task-scheduler task "$t" && echo "  deleted $t"
   done
 
+  # VyOS loops forever on "pkill -HUP -u <user>" while a deleted user is logged in
+  # and one of its processes ignores HUP (nohup, systemd --user). That hangs the
+  # commit and blocks the rollback, so kill those processes first.
+  for u in $gone; do sudo pkill -KILL -u "$u" && echo "  killed processes of $u"; done
   commit_safely
 }
 
 firewall() {
-  [ -n "$WAN_IF" ] || { echo "Could not find the WAN interface (192.168.2xx.x)."; exit 1; }
+  [ -n "$WAN_IF" ] || { echo "Could not find the WAN interface (192.168.2xx.x)."; builtin exit 1; }
   echo "WAN interface: $WAN_IF. Allowing TCP $SCORED_TCP and UDP $SCORED_UDP"
   echo "to $SERVERS from ANY source. Everything else new from WAN is dropped."
-  read -r -p "Continue? [y/N] " r; [[ $r =~ ^[Yy] ]] || exit 0
+  read -r -p "Continue? [y/N] " r; [[ $r =~ ^[Yy] ]] || builtin exit 0
+  check_pending
   configure
   ensure_reload_action
-  delete firewall ipv4 name CCDC-WAN-IN 2>/dev/null
-  delete firewall group port-group CCDC-TCP 2>/dev/null
-  delete firewall group port-group CCDC-UDP 2>/dev/null
-  delete firewall group address-group CCDC-SERVERS 2>/dev/null
+  delete firewall ipv4 name CCDC-WAN-IN >/dev/null 2>&1
+  delete firewall group port-group CCDC-TCP >/dev/null 2>&1
+  delete firewall group port-group CCDC-UDP >/dev/null 2>&1
+  delete firewall group address-group CCDC-SERVERS >/dev/null 2>&1
   for a in $SERVERS;    do set firewall group address-group CCDC-SERVERS address "$a"; done
   for p in $SCORED_TCP; do set firewall group port-group CCDC-TCP port "$p"; done
   for p in $SCORED_UDP; do set firewall group port-group CCDC-UDP port "$p"; done
@@ -162,5 +182,5 @@ case $MODE in
   audit)    audit ;;
   harden)   harden ;;
   firewall) firewall ;;
-  *) echo "usage: $0 {audit|harden|firewall}"; exit 2 ;;
+  *) echo "usage: $0 {audit|harden|firewall}"; builtin exit 2 ;;
 esac
