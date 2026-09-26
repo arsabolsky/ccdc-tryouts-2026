@@ -201,16 +201,20 @@ After `harden` or `firewall`, you have 10 minutes:
 ### 2.6 Sharing a report, log or config (`share.sh` / `share.ps1`)
 
 ```bash
+./share.sh /root/ccdc-backup                             # every text file in a folder (and subfolders), one link
+./share.sh .                                             # every text file in the current folder, one link
 ./share.sh /root/ccdc-backup/hunt-*.txt                  # one link per file
 ./share.sh --one /etc/ssh/sshd_config /etc/vsftpd.conf   # several files in one link
 ./hunt.sh | ./share.sh -                                 # command output
 curl -X DELETE https://paste.rs/<id>                     # delete a paste afterwards
 ```
 ```powershell
+.\share.ps1 C:\ccdc-backup                  # every text file in a folder, one link
 .\share.ps1 C:\ccdc-backup\ccdc-*.log
 Get-Service | Out-String | .\share.ps1
 ```
 - Pastes are public to anyone with the link.
+- Folders: binary files and files over 2 MB are skipped; each file gets a `===== host:path =====` header in the paste.
 - By default, shadow files and private keys are refused, and password values and hashes are replaced with `<redacted>`. `--raw` / `-Raw` turns that off.
 
 **Second opinion from a local model (laptop, Ollama):** upload a report from the box with `share.sh`, then on the laptop run:
