@@ -39,7 +39,10 @@ begin {
   function Get-Redacted([string]$t) {
     if ($Raw) { return $t }
     $t = $t -replace '\$(1|2[abxy]?|5|6|7|y|gy)\$[^:\s]+', '<hash-redacted>'
-    $t = $t -replace '(?i)((?:plaintext-|encrypted-)?password|passwd|secret|pwd|pass)(["''\s]*[=:\s]["''\s]*)[^"''\s,;<]+', '$1$2<redacted>'
+    # Only "=" or ":" mark a value (plus VyOS "*-password '...'"), so log lines
+    # like "Failed password for root from ..." stay intact.
+    $t = $t -replace '(?i)((?:plaintext|encrypted)-password +)[''"]?[^''"\s]+[''"]?', '$1''<redacted>'''
+    $t = $t -replace '(?i)(password|passwd|secret|pwd|pass)(["''\s]*[=:]["''\s]*)[^"''\s,;<]+', '$1$2<redacted>'
     return $t
   }
   function Send-Paste([string]$text) {
