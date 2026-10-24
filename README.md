@@ -99,6 +99,7 @@ curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/scorecheck.sh && chmod +x scorecheck.sh
 curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/share.sh && chmod +x share.sh
+curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/fetch.sh && chmod +x fetch.sh
 curl -fsSLO https://raw.githubusercontent.com/arsabolsky/ccdc-tryouts-2026/main/tools/ask.sh && chmod +x ask.sh
 ```
 
@@ -209,22 +210,34 @@ After `harden` or `firewall`, you have 10 minutes:
 
 ### 2.6 Sharing a report, log or config (`share.sh` / `share.ps1`)
 
+**On the box: upload.** You get back one **INDEX** link:
 ```bash
-./share.sh /root/ccdc-backup                             # every text file in a folder (and subfolders), one link
-./share.sh .                                             # every text file in the current folder, one link
-./share.sh /root/ccdc-backup/hunt-*.txt                  # one link per file
-./share.sh --one /etc/ssh/sshd_config /etc/vsftpd.conf   # several files in one link
+./share.sh /etc/ssh/                                     # a folder (and subfolders)
+./share.sh /root/ccdc-backup/hunt-*.txt /etc/vsftpd.conf # files
 ./hunt.sh | ./share.sh -                                 # command output
-curl -X DELETE https://paste.rs/<id>                     # delete a paste afterwards
+./share.sh --one /etc/ssh/sshd_config /etc/vsftpd.conf   # instead: one readable paste, no index
 ```
 ```powershell
-.\share.ps1 C:\ccdc-backup                  # every text file in a folder, one link
+.\share.ps1 C:\inetpub\wwwroot
 .\share.ps1 C:\ccdc-backup\ccdc-*.log
 Get-Service | Out-String | .\share.ps1
 ```
-- Pastes are public to anyone with the link.
-- Folders: binary files and files over 2 MB are skipped; each file gets a `===== host:path =====` header in the paste.
-- By default, shadow files and private keys are refused, and password values and hashes are replaced with `<redacted>`. `--raw` / `-Raw` turns that off.
+
+**On the laptop: rebuild.** The files come back under their original paths, each one checked:
+```bash
+./fetch.sh https://paste.rs/<index-id>              # into ./ccdc-fetch-<host>-<time>/
+./fetch.sh -o ./iron-ssh https://paste.rs/<index-id>
+```
+
+How it works:
+- **Each file gets its own paste.** Files over 60 KB are split into ordered parts, because paste.rs refuses anything over about 64 KB. When there is more than one paste, a final **INDEX paste** lists every file's path, size, SHA-256 and part links in order. A single small file just gets its own link.
+- **`fetch.sh` checks everything.** It downloads the parts in order and rebuilds each file. It verifies the size and SHA-256 of each file, and reports a missing or changed part as `BAD` instead of writing it. It exits non-zero if anything failed.
+- **The output folder is contained.** Paths with `..` are refused, and absolute paths are rebuilt inside the output folder, never over your own files.
+- **Indexes from Windows work too.** `C:\inetpub\x.config` is rebuilt as `C/inetpub/x.config`.
+- **Folders:** binary files and files over 1 MB are skipped. Name a file directly to include it.
+- **Pastes are public** to anyone with the link. By default, shadow files and private keys are refused, and password values and hashes are replaced with `<redacted>`. `--raw` / `-Raw` turns that off.
+- **Upload failures:** if paste.rs errors, `share.sh` retries twice and then tries termbin.
+- **Deleting a paste:** `curl -X DELETE https://paste.rs/<id>`.
 
 **Second opinion from a local model (laptop, Ollama):** upload a report from the box with `share.sh`, then on the laptop run:
 ```bash
@@ -290,6 +303,7 @@ Harden always backs up first. Afterwards it checks that every service that was r
 | `vyos/ccdc-vyos.sh` | Router audit, hardening and firewall, using commit-confirm |
 | `tools/scorecheck.sh` | Checks scored services from outside, like the scoring engine |
 | `tools/share.sh` | Paste upload with redaction (Linux, VyOS, macOS) |
+| `tools/fetch.sh` | Laptop: rebuild and verify files from a `share.sh` / `share.ps1` INDEX link |
 | `tools/ask.sh` | Laptop: send a paste link, file or piped text to a local Ollama model for triage |
 | `splunk/searches.md` | Splunk hunting searches for Windows and Linux logs |
 
@@ -354,7 +368,11 @@ Harden always backs up first. Afterwards it checks that every service that was r
   - `confirm` then `save`, and repeat runs
   - a real traffic test through the 1:1 NAT: scored ports open, others blocked, passive FTP works
   - every config path was checked against the VyOS schema
-- **share.sh / share.ps1:** tested against a local mock paste server (refusal, binaries, redaction, combined pastes, folders, stdin, raw), plus one real paste.rs upload, fetch and delete.
+- **share.sh / share.ps1 / fetch.sh:** tested against a mock paste server that rejects bodies over 64 KB, like paste.rs.
+  - Uploads came from Rocky 9, macOS and PowerShell; every index was rebuilt on macOS and verified byte for byte.
+  - Files covered: `/etc/ssh` including the 540 KB `moduli`, an empty file, a file with no final newline, large UTF-8 text, a 200 KB single line, nested folders, stdin, Windows CRLF files and paths.
+  - Failure cases: a flaky server is recovered by the retries. A same-size tampered part is caught by SHA-256, and a deleted part is reported; neither file gets written. Index paths with `..` are refused.
+  - One real paste.rs upload, fetch and delete was also done.
 - **Not tested:**
   - Windows code specific to a domain controller (AD users, groups, DNS zones) and the IIS app-pool watchdog; there was no Windows Server or IIS. On lapis, run the audit first and read it.
   - VyOS 2025.11 exactly; a 2026 rolling build was used.
